@@ -1,0 +1,328 @@
+---
+title: "AdobeAPITemplate"
+output: html_document
+---
+
+#*PRE-FACE
+API Package Documentation <https://cran.r-project.org/web/packages/RSiteCatalyst/RSiteCatalyst.pdf>
+
+HOW TO RUN THE CODE: Gray code chunks can be run using the respective green arrow on the right, individual or highlighted lines can be run by pressing ctrl + enter with row highlighted or cursor in row.
+
+'<-' indicates assigning a value to an item/variable to use later. Defined variables will be found in the 'Environment' window.
+ExampleVariable <- 'definition of example'
+
+#1. API AUTHENTICATION & RSITECATALYST PACKAGE
+
+```{r 1st Time Package Install}
+#install.packages('RSiteCatalyst')
+#install.packages('readr')
+```
+
+To obtain authentication credentials (may need to ask a user with access):
+1. Log in to Adobe Analytics: <https://my.omniture.com/login/>
+2. In the 'Admin' dropdown, select 'Company Settings'
+3. Select 'Web Services'
+4. Locate your 'Web Services Username' and 'Shared Secret'
+*MUST ADD YOUR USERNAME AND SHARED SECRET FOR SCRIPT TO WORK
+
+```{r Initiate Library & Authentication}
+library(RSiteCatalyst)
+library(readr) #load this if you want to read/write CSVs and keep the header intact
+
+WebServicesUsername <- 'yourusernamehere'
+SharedSecret <- 'yoursharesecrethere'
+
+SCAuth(WebServicesUsername, SharedSecret)
+```
+
+#Available Report Suites
+
+View all available report suites
+
+```{r Report Suites}
+AvailableRSIDs <- GetReportSuites()
+View(AvailableRSIDs)
+```
+
+#2. SET REPORT SUITE
+Set RSID equal to the report suite id that you would like to retrieve data for
+
+```{r Define Report Suite}
+RSID <- 'vrs_rcci1_excaliburproductionm'
+```
+
+#Available Context Data For Report Suite
+View available elements for defined report suite
+
+```{r Reference Context Data}
+AvailableMetrics <- GetMetrics(RSID) #includes standard metrics, custom metrics, calculated metrics
+View(AvailableMetrics)
+
+AvailableSegments <- GetSegments(RSID)
+View(AvailableSegments)
+
+AvailableElements <- GetElements(RSID) #eVars, Props, other dimensions
+View(AvailableElements)
+```
+
+#3. SET REPORT PARAMETERS
+
+*Define elements to be included in the report
+*Standard, event, and calculated metrics supported
+*Maximum dimensions - 4
+*If multiple segments are included below, they will be treated as an 'AND' condition (ex. Segment 1: Brand ID = CEL & Segment 2: Ship Code = AL, would yield 0 results as AL is RCI)
+
+```{r Define Report Elements}
+ReportMetrics <- c('pageviews','cm300006910_5dd83c4f53953069b28e109d')
+ReportDimensions <- c('evar139')
+DateFrom <- '2020-03-15'
+DateTo <- Sys.Date()-1
+ReportSegments <- c('s300006910_5a660d9c8b49b744fc6d10b2')
+DateGranularity <- 'day' #select from 'hour','day','week','month','year'
+MaxRequestTime <- 10 #in minutes
+
+#Don't Touch
+IntervalSeconds <- 5
+MaxIntervals <- (MaxRequestTime * 60) / IntervalSeconds
+```
+
+#4. REQUEST REPORT
+
+Report Types:
+A.TRENDED REPORT - 1 or more elements with date granularity (ex. visits by device by day)
+B.RANKED REPORT - 1 or more elements with no date granularity (ex. visits by device)
+C.OVERTIME REPORT - No elements with date granularity (ex. visits by day)
+D.SUMMARY REPORT - No elements with no date granularity (ex. visits for a specified period of time) *Cannot apply segments
+
+Once the code is executed, the API will send requests for the specified report to Adobe until the report is ready and received (default of 10 min request window - 120 attempts at 5 sec interval).
+
+#a. Trended Report
+```{r A.Run Trended Report}
+API_Pull <- QueueTrended(reportsuite.id = RSID,
+                         metrics = ReportMetrics,
+                         elements = c(ReportDimensions,'evar143'),
+                         date.to = DateTo,
+                         date.from = DateFrom,
+                         date.granularity = DateGranularity,
+                         segment.id = ReportSegments,
+                         max.attempts = MaxIntervals,
+                         interval.seconds = IntervalSeconds,
+                         top = 50000)
+
+View(API_Pull)
+```
+
+#b. Ranked Report
+A date column is not included in the ranked report. To keep track of date ranges, add DateFrom & DateTo variable values as columns after running the pull.
+```{r B.Run Ranked Report}
+API_Pull <- QueueRanked(reportsuite.id = RSID,
+                        metrics = ReportMetrics,
+                        elements = ReportDimensions,
+                        date.to = DateTo,
+                        date.from = DateFrom,
+                        segment.id = ReportSegments,
+                        max.attempts = MaxIntervals,
+                        interval.seconds = IntervalSeconds,
+                        top = 50000)
+API_Pull$DateFrom <- DateFrom
+API_Pull$DateTo <- DateTo
+
+View(API_Pull)
+```
+
+#c. Overtime Report
+The overtime report includes columns that are not necessarily useful (name, year, month, day). Remove by uncommenting '<- NULL' lines.
+```{r C.Run Overtime Report}
+API_Pull <- QueueOvertime(reportsuite.id = RSID,
+                         metrics = ReportMetrics,
+                         date.to = DateTo,
+                         date.from = DateFrom,
+                         date.granularity = DateGranularity,
+                         segment.id = ReportSegments,
+                         max.attempts = MaxIntervals,
+                         interval.seconds = IntervalSeconds)
+
+#API_Pull$name <- NULL
+#API_Pull$year <- NULL
+#API_Pull$month <- NULL
+#API_Pull$day <- NULL
+
+View(API_Pull)
+```
+
+#d. Summary Report
+Summary report includes an unpleasant date range field. Similar to ranked, add DateFrom & DateTo fields
+```{r D.Run Summary Report}
+API_Pull <- QueueSummary(reportsuite.id = RSID,
+                         metrics = ReportMetrics,
+                         date.to = DateTo,
+                         date.from = DateFrom,
+                         max.attempts = MaxIntervals,
+                         interval.seconds = IntervalSeconds)
+
+API_Pull$DateFrom <- DateFrom
+API_Pull$DateTo <- DateTo
+API_Pull$period <- NULL
+
+View(API_Pull)
+```
+
+#REPORT TIPS
+These are ways to get around a few limitations with the API
+
+A.MORE THAN 50K RECORD BREAKDOWN - Loop through top N results with different start points until no data is retrieved
+B.SEPARATE SEGMENTS - Loop through a segment list to get results by segment without treating them as 'AND' logic
+C.CUSTOM DATE INTERVALS - Each loop is individual pulled by a date chunk using your own series parameters
+D.RENAME CALCULATED METRICS - Calculated metric ids are annoying, let's rename them dynamically
+E.QUEUE LARGE REPORTS - Avoid waiting for excessive API requests
+
+#a. For Breakdowns w/More Than 50K Records
+Use a loop to bypass API request limitation of 50K records
+
+```{r Set 50K+ Loop Parameters}
+count.limit <- 1000000  #the max number of records we're interested in
+count.step <- 20000 #how many records to retrieve per request, must not exceed 50k
+count.start <- 1 #which record number to start with
+```
+
+Loop runs count.step results, saves results in a temporary table that is then appended to the final table on each loop.
+
+```{r Run Trended 50K+ Report With Loop}
+API_Pull <- NULL
+
+for(i in seq(1, count.limit, by = count.step)) {
+  print(paste("Requesting rows",i, "through", i + count.step - 1))
+  
+  
+  Temp_API_Pull <- QueueTrended(RSID,
+                                date.from = DateFrom,
+                                date.to = DateTo,
+                                max.attempts = MaxIntervals,
+                                top = count.step,
+                                start = i,
+                                date.granularity = DateGranularity,
+                                segment.id = ReportSegments,
+                                metrics = ReportMetrics,
+                                elements = ReportDimensions)
+  
+  
+  if  (nrow(Temp_API_Pull) == 0 ) {   # no more rows were returned - presumably we have them all now
+    print("Last batch had no rows, exiting loop")
+    break
+  }
+  
+  Temp_API_Pull$batch.start.row <- i
+  
+  API_Pull <- rbind(API_Pull, Temp_API_Pull)
+  
+}
+
+View(API_Pull)
+```
+
+#b. For Separate Reports by Segment
+Use a loop to repeat the same report for multiple segments (ex. iOS, Android ) and append data sets
+
+```{r Set Segment Loop Parameters}
+SegmentLoop <- list('s300006910_5b7449743f1e927f820e94a6','s300006910_5b744917d39bbd686b35d8bd')
+```
+
+Loop runs through the segment list, saves results in a temporary table that is then appended to the final table on each loop. MUST RUN SEGMENT LOOP FIRST
+
+```{r Run Trended Segment Report With Loop}
+API_Pull <- NULL
+
+for(seg in SegmentLoop) {
+  print(paste("Requesting segment:",seg))
+  
+  
+  Temp_API_Pull <- QueueTrended(RSID,
+                                date.from = DateFrom,
+                                date.to = DateTo,
+                                max.attempts = MaxIntervals,
+                                interval.seconds = IntervalSeconds,
+                                date.granularity = DateGranularity,
+                                segment.id = c(seg, ReportSegments),
+                                metrics = ReportMetrics,
+                                elements = ReportDimensions)
+  
+  API_Pull <- rbind(API_Pull, Temp_API_Pull)
+}
+
+View(API_Pull)
+```
+
+#c. For Custom Date Intervals
+
+```{r Run Custom Date Interval Report With Loop}
+API_Pull <- NULL
+
+week <- seq(from=as.Date(DateFrom), to=as.Date(DateTo),by=7 ) #based on start date +7 day increments
+
+date1 <- NULL
+date2 <- NULL
+
+for ( i in seq_along(week)){
+  date1 <- week[i]
+  date2 <- date1 + 6
+  print(paste("Requesting date ",date1," through ",date2))
+  
+  Temp_API_Pull <- QueueRanked(reportsuite.id = RSID,
+                        metrics = ReportMetrics,
+                        elements = ReportDimensions,
+                        date.to = date2,
+                        date.from = date1,
+                        segment.id = ReportSegments,
+                        max.attempts = MaxIntervals,
+                        interval.seconds = IntervalSeconds,
+                        top = 50000)
+  
+  Temp_API_Pull$DateFrom <- date1
+  Temp_API_Pull$DateTo <- date2
+  
+  API_Pull <- rbind(API_Pull, Temp_API_Pull)
+}
+
+View(API_Pull)
+```
+
+#d. If you used calculated metrics in your report, let's rename those
+Use a loop to rename calculated metrics to friendly names
+
+```{r Rename Metric IDs}
+for (metric_id in ReportMetrics){
+  names(API_Pull)[names(API_Pull) == metric_id] <- AvailableMetrics[AvailableMetrics$id == metric_id, 'name']
+}
+
+View(API_Pull)
+```
+
+#e. If you don't want to wait for API requests, retrieve report later
+Set the report to EnqueuOnly = TRUE
+Created report ID is good ~48 hours
+
+```{r Run Trended Report with EnqueueOnly = TRUE}
+API_Pull_ID <- QueueTrended(reportsuite.id = RSID,
+                         metrics = ReportMetrics,
+                         elements = ReportDimensions,
+                         date.to = DateTo,
+                         date.from = DateFrom,
+                         date.granularity = DateGranularity,
+                         segment.id = ReportSegments,
+                         max.attempts = MaxIntervals,
+                         interval.seconds = IntervalSeconds,
+                         enqueueOnly = TRUE,
+                         top = 50000)
+```
+
+Retrieve API Pull by ID
+```{r Get Report by API Pull ID}
+API_Pull <- GetReport(API_Pull_ID)
+```
+
+#5. OUTPUT DATA
+A.TO CSV - write to a specified file path
+
+```{r A.To CSV}
+write_csv(API_Pull,'DemoAPI.csv')
+```
